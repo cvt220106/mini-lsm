@@ -1,4 +1,5 @@
 /target
+.idea/
 .vscode/
 sync-tmp/
 mini-lsm.db/
