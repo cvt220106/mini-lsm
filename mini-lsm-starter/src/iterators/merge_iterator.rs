@@ -3,6 +3,7 @@
 
 use std::cmp::{self};
 use std::collections::BinaryHeap;
+use std::collections::binary_heap::PeekMut;
 
 use anyhow::Result;
 
@@ -28,7 +29,7 @@ impl<I: StorageIterator> PartialOrd for HeapWrapper<I> {
             cmp::Ordering::Less => Some(cmp::Ordering::Less),
             cmp::Ordering::Equal => self.0.partial_cmp(&other.0),
         }
-        .map(|x| x.reverse())
+            .map(|x| x.reverse())
     }
 }
 
@@ -47,28 +48,103 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        unimplemented!()
+        // check iters empty
+        if iters.is_empty() {
+            return Self {
+                iters: BinaryHeap::new(),
+                current: None,
+            };
+        }
+
+        let mut binary_heap = BinaryHeap::new();
+
+        // if all iters is invalid,
+        if iters.iter().all(|x| !x.is_valid()) {
+            let mut iters = iters;
+            return Self {
+                iters: binary_heap,
+                current: Some(HeapWrapper(0, iters.pop().unwrap())),
+            };
+        }
+
+        // push valid iters to heap
+        for (i, v) in iters.into_iter().enumerate() {
+            if v.is_valid() {
+                binary_heap.push(HeapWrapper(i, v));
+            }
+        }
+        let current = binary_heap.pop().unwrap();
+        Self {
+            iters: binary_heap,
+            current: Some(current),
+        }
     }
 }
 
-impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIterator
-    for MergeIterator<I>
+impl<I: 'static + for<'a> StorageIterator<KeyType<'a>=KeySlice<'a>>> StorageIterator
+for MergeIterator<I>
 {
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.value()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.current.as_ref().map(|x| x.1.is_valid()).unwrap_or(false)
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        // iter1: b->del, c->4, d->5
+        // iter2: a->1, b->2, c->3
+        // iter3: e->4
+        // a->1, b->del, c->4, d->5, e->4
+        // return every key associate latest value
+        let current = self.current.as_mut().unwrap();
+        // 1. check the same key in other iter, pop this iter
+        while let Some(mut inner_iter) = self.iters.peek_mut() {
+            debug_assert!(inner_iter.1.key() >= current.1.key(), "violet iters sequence");
+
+            if inner_iter.1.key() == current.1.key() {
+                // Case 1: an error occurred when calling `next`.
+                if let e @ Err(_) = inner_iter.1.next() {
+                    PeekMut::pop(inner_iter);
+                    return e;
+                }
+
+                // Case 2: the iter no longer invalid
+                if !inner_iter.1.is_valid() {
+                    PeekMut::pop(inner_iter);
+                }
+            } else {
+                break;
+            }
+        }
+
+        // current to the next one
+        current.1.next()?;
+        // 2.check the current validation, if invalid, pop heap to replace
+        if !current.1.is_valid() {
+            if let Some(iter) = self.iters.pop() {
+                *current = iter;
+            }
+            return Ok(());
+        }
+
+        // 3.check the current whether is the latest one
+        // compare to the heap peek, if heap is smaller, swap it
+        if let Some(mut inner_iter) = self.iters.peek_mut() {
+            // attention!! actually small one, in our sort mode, is the big one
+            // because we use max-heap, so we reverse the sort result
+            if *current < *inner_iter {
+                std::mem::swap(current, &mut *inner_iter);
+            }
+        }
+
+        Ok(())
     }
 }

@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
@@ -6,11 +5,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
+use crossbeam_skiplist::map::Entry;
 use crossbeam_skiplist::SkipMap;
 use nom::AsBytes;
 use ouroboros::self_referencing;
-use serde::de::Unexpected::Bytes;
-use serde_json::map::Entry;
 
 use crate::iterators::StorageIterator;
 use crate::key::KeySlice;
@@ -50,12 +48,7 @@ impl MemTable {
 
     /// Create a new mem-table with WAL
     pub fn create_with_wal(_id: usize, _path: impl AsRef<Path>) -> Result<Self> {
-        Ok(Self {
-            id: _id,
-            map: Arc::new(SkipMap::new()),
-            wal: Some(Wal::create(_path.as_ref())?),
-            approximate_size: Arc::new(AtomicUsize::new(0)),
-        })
+        unimplemented!()
     }
 
     /// Create a memtable from WAL
@@ -81,7 +74,7 @@ impl MemTable {
 
     /// Get a value by key.
     pub fn get(&self, _key: &[u8]) -> Option<Bytes> {
-        self.map.get(_key).map(|node| node.value().clone())
+        self.map.get(_key).map(|entry| entry.value().clone())
     }
 
     /// Put a key-value pair into the mem-table.
@@ -89,12 +82,11 @@ impl MemTable {
     /// In week 1, day 1, simply put the key-value pair into the skipmap.
     /// In week 2, day 6, also flush the data to WAL.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
+        let approximate_len = _key.len() + _value.len();
         self.map
             .insert(Bytes::copy_from_slice(_key), Bytes::copy_from_slice(_value));
-        self.approximate_size.fetch_add(
-            _key.len() + _value.len(),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.approximate_size
+            .fetch_add(approximate_len, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -107,13 +99,13 @@ impl MemTable {
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        let (lower, upper) = (map_bound(lower), map_bound(upper));
+        let (lower, upper) = (map_bound(_lower), map_bound(_upper));
         let mut iter = MemTableIteratorBuilder {
-            map: self.map.clone(),
+            map: Arc::clone(&self.map),
             iter_builder: |map| map.range((lower, upper)),
             item: (Bytes::new(), Bytes::new()),
         }
-        .build();
+            .build();
         iter.next().unwrap();
         iter
     }
@@ -139,7 +131,7 @@ impl MemTable {
 }
 
 type SkipMapRangeIter<'a> =
-    crossbeam_skiplist::map::Range<'a, Bytes, (Bound<Bytes>, Bound<Bytes>), Bytes, Bytes>;
+crossbeam_skiplist::map::Range<'a, Bytes, (Bound<Bytes>, Bound<Bytes>), Bytes, Bytes>;
 
 /// An iterator over a range of `SkipMap`. This is a self-referential structure and please refer to week 1, day 2
 /// chapter for more information.
@@ -160,8 +152,9 @@ pub struct MemTableIterator {
 impl MemTableIterator {
     fn entry_to_item(entry: Option<Entry<'_, Bytes, Bytes>>) -> (Bytes, Bytes) {
         entry
-            .map(|x| (x.key().clone(), x.value().clone()))
-            .unwrap_or_else(|| (Bytes::from_static(&[]), Bytes::from_static(&[])))
+            .map(|v| (v.key().clone(), v.value().clone()))
+            .unwrap_or_else(|| (Bytes::copy_from_slice(&[]), Bytes::copy_from_slice(&[]))
+        )
     }
 }
 
@@ -177,12 +170,13 @@ impl StorageIterator for MemTableIterator {
     }
 
     fn is_valid(&self) -> bool {
-        self.borrow_item().0.is_empty()
+        !self.borrow_item().0.is_empty()
     }
 
     fn next(&mut self) -> Result<()> {
-        let entry = self.with_item_mut(|iter| MemTableIterator::entry_to_item(iter.next()));
-        self.with_mut(|x| *x.item = entry);
+        let entry = self.with_iter_mut(|iter| MemTableIterator::entry_to_item(iter.next()));
+        self.with_item_mut(|item| *item = entry);
         Ok(())
     }
 }
+

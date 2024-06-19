@@ -15,6 +15,7 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::merge_iterator::MergeIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
@@ -279,6 +280,7 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
+        // use clone make a unchanged snapshot to get, minimum time to hold the lock
         let snapshot = {
             let state = self.state.read();
             Arc::clone(&state)
@@ -296,11 +298,11 @@ impl LsmStorageInner {
         // search by all freeze imm_memtable
         for mem_table in snapshot.imm_memtables.iter() {
             if let Some(value) = mem_table.get(_key) {
-                if value.is_empty() {
-                    return Ok(None);
+                return if value.is_empty() {
+                    Ok(None)
                 } else {
-                    return Ok(Some(value));
-                }
+                    Ok(Some(value))
+                };
             }
         }
         Ok(None)
@@ -401,6 +403,18 @@ impl LsmStorageInner {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        unimplemented!()
+        // use clone make a unchanged snapshot to get, minimum time to hold the lock
+        let snapshot = {
+            let state = self.state.read();
+            Arc::clone(&state)
+        };
+        let mut iters = vec![Box::new(snapshot.memtable.scan(_lower, _upper))];
+        for iter in snapshot.imm_memtables.iter() {
+            iters.push(Box::new(iter.scan(_lower, _upper)));
+        }
+        let iters = MergeIterator::create(iters);
+
+        let iters = FusedIterator::new(LsmIterator::new(iters)?);
+        Ok(iters)
     }
 }
