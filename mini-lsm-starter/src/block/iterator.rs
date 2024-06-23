@@ -1,6 +1,6 @@
+use bytes::Buf;
 use std::cmp::Ordering;
 use std::sync::Arc;
-use bytes::Buf;
 
 use crate::key::{KeySlice, KeyVec};
 
@@ -75,7 +75,10 @@ impl BlockIterator {
 
             let value_begin = LEN_VAR_SIZE + key_len;
             let value_len = (&data[value_begin..value_begin + LEN_VAR_SIZE]).get_u16() as usize;
-            self.value_range = (value_begin + LEN_VAR_SIZE, value_begin + LEN_VAR_SIZE+ value_len);
+            self.value_range = (
+                value_begin + LEN_VAR_SIZE,
+                value_begin + LEN_VAR_SIZE + value_len,
+            );
         }
     }
 
@@ -92,15 +95,19 @@ impl BlockIterator {
             let data = self.block.data.as_slice();
             let offset = *self.block.offsets.get(self.idx).unwrap() as usize;
             let key_len = (&data[offset..LEN_VAR_SIZE + offset]).get_u16() as usize;
-            self.key = KeyVec::from_vec(data[offset + LEN_VAR_SIZE..LEN_VAR_SIZE + offset + key_len].to_vec());
+            self.key = KeyVec::from_vec(
+                data[offset + LEN_VAR_SIZE..LEN_VAR_SIZE + offset + key_len].to_vec(),
+            );
 
             let value_begin = offset + LEN_VAR_SIZE + key_len;
             let value_len = (&data[value_begin..value_begin + LEN_VAR_SIZE]).get_u16() as usize;
-            self.value_range = (value_begin + LEN_VAR_SIZE, value_begin + LEN_VAR_SIZE + value_len);
+            self.value_range = (
+                value_begin + LEN_VAR_SIZE,
+                value_begin + LEN_VAR_SIZE + value_len,
+            );
 
             true
         }
-
     }
 
     /// Seek to the first key that >= `key`.

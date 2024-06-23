@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use anyhow::{bail, Result};
 
 use crate::{
@@ -17,7 +14,7 @@ pub struct LsmIterator {
 
 impl LsmIterator {
     pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
-        let mut iter = Self {inner: iter};
+        let mut iter = Self { inner: iter };
         iter.move_to_non_delete()?;
 
         Ok(iter)

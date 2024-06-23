@@ -1,8 +1,5 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
+use crate::key::{KeyBytes, KeySlice, KeyVec};
 use bytes::BufMut;
-use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
 
@@ -18,6 +15,8 @@ pub struct BlockBuilder {
     block_size: usize,
     /// The first key in the block
     first_key: KeyVec,
+    /// the last key in the block
+    last_key: KeyVec,
 }
 
 impl BlockBuilder {
@@ -28,6 +27,7 @@ impl BlockBuilder {
             data: Vec::new(),
             block_size,
             first_key: KeyVec::new(),
+            last_key: KeyVec::new(),
         }
     }
 
@@ -57,6 +57,9 @@ impl BlockBuilder {
         // value
         self.data.put(value);
 
+        // update the last key
+        self.last_key = key.to_key_vec();
+
         true
     }
 
@@ -75,6 +78,13 @@ impl BlockBuilder {
             data: self.data,
             offsets: self.offsets,
         }
+    }
+
+    pub fn first_and_last_key(&self) -> (KeyBytes, KeyBytes) {
+        (
+            self.first_key.clone().into_key_bytes(),
+            self.last_key.clone().into_key_bytes(),
+        )
     }
 
     fn current_size(&self) -> usize {

@@ -1,7 +1,6 @@
 mod builder;
 mod iterator;
 
-use std::io::Read;
 pub use builder::BlockBuilder;
 use bytes::{Buf, BufMut, Bytes};
 pub use iterator::BlockIterator;
@@ -35,13 +34,13 @@ impl Block {
         let data_end = data.len() - LEN_VAR_SIZE - num_of_elements * LEN_VAR_SIZE;
         // retrieve offset vec
         let offset_raw = &data[data_end..data.len() - LEN_VAR_SIZE];
-        let offsets: Vec<u16> = offset_raw.chunks(LEN_VAR_SIZE).map(|mut x| x.get_u16()).collect();
+        let offsets: Vec<u16> = offset_raw
+            .chunks(LEN_VAR_SIZE)
+            .map(|mut x| x.get_u16())
+            .collect();
         // retrieve data vec
         let data = data[..data_end].to_vec();
 
-        Self {
-            data,
-            offsets
-        }
+        Self { data, offsets }
     }
 }
