@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 pub(crate) mod bloom;
 mod builder;
 mod iterator;
@@ -9,9 +6,9 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 pub use builder::SsTableBuilder;
-use bytes::Buf;
+use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
@@ -19,6 +16,8 @@ use crate::key::{KeyBytes, KeySlice};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
+
+const LEN_VAR_SIZE: usize = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockMeta {
@@ -34,17 +33,54 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
-        unimplemented!()
+    pub fn encode_block_meta(block_metas: &[BlockMeta], buf: &mut Vec<u8>) {
+        // compute estimated size of buf will put
+        // reduce the time consume of Vec clone and move in memory extend
+        let mut estimated_size = 0;
+        for block_meta in block_metas.iter() {
+            // the size of offset len
+            estimated_size += std::mem::size_of::<u32>();
+            // the size of first_key_len
+            estimated_size += std::mem::size_of::<u16>();
+            // the size of first_key
+            estimated_size += block_meta.first_key.len();
+            // the size of last_key_len
+            estimated_size += std::mem::size_of::<u16>();
+            // the size of last_key
+            estimated_size += block_meta.last_key.len();
+        }
+
+        buf.reserve(estimated_size);
+        for block_meta in block_metas.iter() {
+            // | offset(4b) | first_key_len(2b) | first_key | last_key_len(2b) | last_key |
+            // add the offset
+            buf.put_u32(block_meta.offset as u32);
+            // add the length of first_key and first_key
+            buf.put_u16(block_meta.first_key.len() as u16);
+            buf.put(block_meta.first_key.raw_ref());
+            // add the length of last_key and last_key
+            buf.put_u16(block_meta.last_key.len() as u16);
+            buf.put(block_meta.last_key.raw_ref());
+        }
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(buf: impl Buf) -> Vec<BlockMeta> {
-        unimplemented!()
+    pub fn decode_block_meta(mut buf: impl Buf) -> Vec<BlockMeta> {
+        let mut block_metas = Vec::new();
+        while buf.has_remaining() {
+            let offset = buf.get_u32() as usize;
+            let first_key_len = buf.get_u16() as usize;
+            let first_key = KeyBytes::from_bytes(buf.copy_to_bytes(first_key_len));
+            let last_key_len = buf.get_u16() as usize;
+            let last_key = KeyBytes::from_bytes(buf.copy_to_bytes(last_key_len));
+            block_metas.push(BlockMeta {
+                offset,
+                first_key,
+                last_key,
+            })
+        }
+
+        block_metas
     }
 }
 
@@ -108,7 +144,27 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        unimplemented!()
+        let len = file.size();
+        let meta_offset = file.read(len - 4, 4)?.as_slice().get_u32();
+        let block_meta = BlockMeta::decode_block_meta(
+            file.read(meta_offset as u64, len - 4 - meta_offset as u64)?
+                .as_slice(),
+        );
+
+        let first_key = block_meta.first().unwrap().first_key.clone();
+        let last_key = block_meta.last().unwrap().last_key.clone();
+
+        Ok(Self {
+            file,
+            block_meta,
+            block_meta_offset: meta_offset as usize,
+            id,
+            block_cache,
+            first_key,
+            last_key,
+            bloom: None,
+            max_ts: 0,
+        })
     }
 
     /// Create a mock SST with only first key + last key metadata
@@ -133,19 +189,40 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        let mut data = Vec::new();
+        let offset = self.block_meta.get(block_idx).unwrap().offset;
+        let len = if block_idx == self.num_of_blocks() - 1 {
+            self.block_meta_offset - offset
+        } else {
+            self.block_meta.get(block_idx + 1).unwrap().offset - offset
+        };
+
+        data = self.file.read(offset as u64, len as u64)?;
+
+        Ok(Arc::new(Block::decode(data.as_slice())))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        if let Some(ref block_cache) = self.block_cache {
+            let block = block_cache
+                .try_get_with((self.id, block_idx), || self.read_block(block_idx))
+                .map_err(|e| anyhow!("{}", e))?;
+            Ok(block)
+        } else {
+            self.read_block(block_idx)
+        }
     }
 
     /// Find the block that may contain `key`.
     /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
-        unimplemented!()
+        self.block_meta
+            .partition_point(|meta| {
+                meta.first_key.as_key_slice() <= key && meta.last_key.as_key_slice() >= key
+            })
+            .saturating_sub(1)
     }
 
     /// Get number of data blocks.
