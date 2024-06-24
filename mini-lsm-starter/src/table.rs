@@ -17,8 +17,6 @@ use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
 
-const LEN_VAR_SIZE: usize = 2;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockMeta {
     /// Offset of this data block.
@@ -189,7 +187,6 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        let mut data = Vec::new();
         let offset = self.block_meta.get(block_idx).unwrap().offset;
         let len = if block_idx == self.num_of_blocks() - 1 {
             self.block_meta_offset - offset
@@ -197,7 +194,7 @@ impl SsTable {
             self.block_meta.get(block_idx + 1).unwrap().offset - offset
         };
 
-        data = self.file.read(offset as u64, len as u64)?;
+        let data = self.file.read(offset as u64, len as u64)?;
 
         Ok(Arc::new(Block::decode(data.as_slice())))
     }

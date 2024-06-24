@@ -29,11 +29,15 @@ impl<
     }
 
     fn choose_a(&self) -> bool {
-        if self.a.is_valid() && self.b.is_valid() {
-            return self.a.key() < self.b.key();
-        } else {
-            self.a.is_valid()
+        if !self.a.is_valid() {
+            return false;
         }
+
+        if !self.b.is_valid() {
+            return true;
+        }
+
+        self.a.key() < self.b.key()
     }
 
     fn skip_b_to_next(&mut self) -> Result<()> {
@@ -87,5 +91,9 @@ impl<
         self.choose_a = self.choose_a();
 
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.a.num_active_iterators() + self.b.num_active_iterators()
     }
 }
