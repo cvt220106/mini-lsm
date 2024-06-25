@@ -52,6 +52,14 @@ impl BlockIterator {
         self.key.as_key_slice()
     }
 
+    fn reconstruct_key(first_key: &KeyVec, rest_key: KeyVec, key_overlap_len: usize) -> KeyVec {
+        let mut key = KeyVec::new();
+        key.append(&first_key.raw_ref()[..key_overlap_len]);
+        key.append(rest_key.raw_ref());
+
+        key
+    }
+
     /// Returns the value of the current entry.
     pub fn value(&self) -> &[u8] {
         &self.block.data[self.value_range.0..self.value_range.1]
@@ -67,13 +75,13 @@ impl BlockIterator {
     pub fn seek_to_first(&mut self) {
         if !self.block.data.is_empty() {
             self.idx = 0;
-
             let data = self.block.data.as_slice();
             let key_len = (&data[0..LEN_VAR_SIZE]).get_u16() as usize;
             self.first_key = KeyVec::from_vec(data[LEN_VAR_SIZE..LEN_VAR_SIZE + key_len].to_vec());
             self.key = self.first_key.clone();
-
-            let value_begin = LEN_VAR_SIZE + key_len;
+            // first key-pair struct
+            // | key_len(2b) | key(key_len) | value_len(2b) | value(value_len) |
+            let value_begin = LEN_VAR_SIZE + self.first_key.len();
             let value_len = (&data[value_begin..value_begin + LEN_VAR_SIZE]).get_u16() as usize;
             self.value_range = (
                 value_begin + LEN_VAR_SIZE,
@@ -94,12 +102,18 @@ impl BlockIterator {
             self.idx += 1;
             let data = self.block.data.as_slice();
             let offset = *self.block.offsets.get(self.idx).unwrap() as usize;
-            let key_len = (&data[offset..LEN_VAR_SIZE + offset]).get_u16() as usize;
-            self.key = KeyVec::from_vec(
-                data[offset + LEN_VAR_SIZE..LEN_VAR_SIZE + offset + key_len].to_vec(),
+            // the next key struct, use the key compaction strategy
+            // compare prefix with first key
+            // | key_overlap_len(2b) | rest_key_len(2b) | rest_key(rest_key_len) |
+            let key_overlap_len = (&data[offset..LEN_VAR_SIZE + offset]).get_u16() as usize;
+            let rest_key_len =
+                (&data[offset + LEN_VAR_SIZE..LEN_VAR_SIZE * 2 + offset]).get_u16() as usize;
+            let rest_key = KeyVec::from_vec(
+                data[offset + LEN_VAR_SIZE * 2..LEN_VAR_SIZE * 2 + offset + rest_key_len].to_vec(),
             );
+            self.key = Self::reconstruct_key(&self.first_key, rest_key, key_overlap_len);
 
-            let value_begin = offset + LEN_VAR_SIZE + key_len;
+            let value_begin = offset + LEN_VAR_SIZE * 2 + rest_key_len;
             let value_len = (&data[value_begin..value_begin + LEN_VAR_SIZE]).get_u16() as usize;
             self.value_range = (
                 value_begin + LEN_VAR_SIZE,

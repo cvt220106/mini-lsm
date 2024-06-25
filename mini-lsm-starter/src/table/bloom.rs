@@ -25,6 +25,8 @@ impl<T: AsRef<[u8]>> BitSlice for T {
         let pos = idx / 8;
         let offset = idx % 8;
         (self.as_ref()[pos] & (1 << offset)) != 0
+        // if offset idx is 1, & result is 1, or not is 0
+        // so if offset idx bit is 1, return true, or not return false
     }
 
     fn bit_len(&self) -> usize {
@@ -37,9 +39,9 @@ impl<T: AsMut<[u8]>> BitSliceMut for T {
         let pos = idx / 8;
         let offset = idx % 8;
         if val {
-            self.as_mut()[pos] |= 1 << offset;
+            self.as_mut()[pos] |= 1 << offset; // set the offset idx bit to 1
         } else {
-            self.as_mut()[pos] &= !(1 << offset);
+            self.as_mut()[pos] &= !(1 << offset); // set the offset idx bit to 0
         }
     }
 }
@@ -79,7 +81,16 @@ impl Bloom {
         let mut filter = BytesMut::with_capacity(nbytes);
         filter.resize(nbytes, 0);
 
-        // TODO: build the bloom filter
+        for key in keys {
+            let mut h = key.clone();
+            let delta = (h >> 17) | (h << 15);
+            for _ in 0..k {
+                let idx = (h as usize) % nbits;
+                filter.set_bit(idx, true);
+
+                h = h.wrapping_add(delta);
+            }
+        }
 
         Self {
             filter: filter.freeze(),
@@ -95,8 +106,14 @@ impl Bloom {
         } else {
             let nbits = self.filter.bit_len();
             let delta = (h >> 17) | (h << 15);
-
-            // TODO: probe the bloom filter
+            let mut hash_key = h;
+            for _ in 0..self.k {
+                let idx = (hash_key as usize) % nbits;
+                if !self.filter.get_bit(idx) {
+                    return false;
+                }
+                hash_key = hash_key.wrapping_add(delta);
+            }
 
             true
         }

@@ -6,8 +6,10 @@ use bytes::BufMut;
 
 use super::{BlockMeta, FileObject, SsTable};
 use crate::key::KeyBytes;
+use crate::table::bloom::Bloom;
 use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
 
+const FALSE_PR: f64 = 0.01_f64;
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
     builder: BlockBuilder,
@@ -16,6 +18,8 @@ pub struct SsTableBuilder {
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
     block_size: usize,
+    key_hashes: Vec<u32>,
+    entity_num: usize,
 }
 
 impl SsTableBuilder {
@@ -28,6 +32,8 @@ impl SsTableBuilder {
             data: Vec::new(),
             meta: Vec::new(),
             block_size,
+            key_hashes: Vec::new(),
+            entity_num: 0,
         }
     }
 
@@ -40,6 +46,10 @@ impl SsTableBuilder {
         while !self.builder.add(key, value) {
             self.process();
         }
+        // add key hash info
+        let h = farmhash::fingerprint32(key.raw_ref());
+        self.key_hashes.push(h);
+        self.entity_num += 1;
     }
 
     fn process(&mut self) {
@@ -84,20 +94,29 @@ impl SsTableBuilder {
         let mut data = sst.data.clone();
         let meta = sst.meta.clone();
 
-        let offset = data.len() as u32;
+        // add block meta data to data storage
+        let meta_offset = data.len() as u32;
         BlockMeta::encode_block_meta(meta.as_slice(), &mut data);
-        data.put_u32(offset);
+        data.put_u32(meta_offset);
+
+        // make a bloom filter
+        let bits_per_key = Bloom::bloom_bits_per_key(sst.entity_num, FALSE_PR);
+        let bloom = Bloom::build_from_key_hashes(sst.key_hashes.as_slice(), bits_per_key);
+        // add bloom filter info to data storage
+        let bloom_offset = data.len() as u32;
+        bloom.encode(&mut data);
+        data.put_u32(bloom_offset);
         let file = FileObject::create(path.as_ref(), data)?;
 
         Ok(SsTable {
             file,
             block_meta: meta,
-            block_meta_offset: offset as usize,
+            block_meta_offset: meta_offset as usize,
             id,
             block_cache,
             first_key: KeyBytes::from_bytes(sst.first_key.into()),
             last_key: KeyBytes::from_bytes(sst.last_key.into()),
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0,
         })
     }

@@ -333,15 +333,22 @@ impl LsmStorageInner {
         // make sst search as a merge iter search
         for idx in snapshot.l0_sstables.iter() {
             let sst = snapshot.sstables[idx].clone();
-            if key_within(_key, sst.first_key().raw_ref(), sst.last_key().raw_ref()) {
-                let iter =
-                    SsTableIterator::create_and_seek_to_key(sst, KeySlice::from_slice(_key))?;
-                if iter.is_valid() && iter.key().raw_ref() == _key {
-                    return if iter.value().is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(Bytes::copy_from_slice(iter.value())))
-                    };
+            let h = farmhash::fingerprint32(_key);
+            if let Some(bloom) = sst.bloom.as_ref() {
+                if bloom.may_contain(h) {
+                    if key_within(_key, sst.first_key().raw_ref(), sst.last_key().raw_ref()) {
+                        let iter = SsTableIterator::create_and_seek_to_key(
+                            sst,
+                            KeySlice::from_slice(_key),
+                        )?;
+                        if iter.is_valid() && iter.key().raw_ref() == _key {
+                            return if iter.value().is_empty() {
+                                Ok(None)
+                            } else {
+                                Ok(Some(Bytes::copy_from_slice(iter.value())))
+                            };
+                        }
+                    }
                 }
             }
         }

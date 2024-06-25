@@ -35,23 +35,39 @@ impl BlockBuilder {
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
         assert!(!key.is_empty(), "key must not be empty");
-        let key_len = key.len() as u16;
         let value_len = value.len() as u16;
-        let add_len = key_len + value_len + LEN_VAR_SIZE as u16 * 3;
         if self.is_empty() {
-            // init the first key
+            // init the first key and last key
             self.first_key = key.to_key_vec();
+            self.last_key = key.to_key_vec();
+
+            // especially store first key-value
+            self.data.put_u16(key.len() as u16);
+            self.data.put(key.raw_ref());
+            // value_len
+            self.data.put_u16(value_len);
+            // value
+            self.data.put(value);
+
+            self.offsets.push(0);
+            return true;
         }
-        if add_len as usize + self.current_size() > self.block_size && !self.is_empty() {
+
+        let (key_overlap_len, rest_key_len, rest_key) =
+            Self::key_prefix_compaction(self.first_key.raw_ref(), key.raw_ref());
+        let add_len = rest_key_len + value_len + LEN_VAR_SIZE as u16 * 4;
+        if add_len as usize + self.current_size() > self.block_size {
             return false;
         }
 
         let offset = self.data.len() as u16;
         self.offsets.push(offset);
-        // key_len
-        self.data.put_u16(key_len);
-        // key
-        self.data.put(key.raw_ref());
+        // key_overlap_len
+        self.data.put_u16(key_overlap_len);
+        // rest_key_len
+        self.data.put_u16(rest_key_len);
+        // rest_key
+        self.data.put(rest_key);
         // value_len
         self.data.put_u16(value_len);
         // value
@@ -61,6 +77,16 @@ impl BlockBuilder {
         self.last_key = key.to_key_vec();
 
         true
+    }
+
+    fn key_prefix_compaction<'a>(first_key: &'a [u8], key: &'a [u8]) -> (u16, u16, &'a [u8]) {
+        let overlap_len = key
+            .iter()
+            .zip(first_key.iter())
+            .take_while(|&(a, b)| a == b)
+            .count();
+        let rest_key = &key[overlap_len..];
+        (overlap_len as u16, rest_key.len() as u16, rest_key)
     }
 
     /// Check if there is no key-value pair in the block.
