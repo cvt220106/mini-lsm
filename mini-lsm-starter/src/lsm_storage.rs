@@ -15,6 +15,7 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
@@ -303,7 +304,7 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        // use clone make a unchanged snapshot to get, minimum time to hold the lock
+        // use clone make an unchanged snapshot to get, minimum time to hold the lock
         let snapshot = {
             let state = self.state.read();
             Arc::clone(&state)
@@ -311,11 +312,11 @@ impl LsmStorageInner {
 
         // search by memtable
         if let Some(value) = snapshot.memtable.get(_key) {
-            if value.is_empty() {
-                return Ok(None);
+            return if value.is_empty() {
+                Ok(None)
             } else {
-                return Ok(Some(value));
-            }
+                Ok(Some(value))
+            };
         }
 
         // search by all freeze imm_memtable
@@ -329,7 +330,7 @@ impl LsmStorageInner {
             }
         }
 
-        // search by sst
+        // search by l0 sst
         // make sst search as a merge iter search
         for idx in snapshot.l0_sstables.iter() {
             let sst = snapshot.sstables[idx].clone();
@@ -352,7 +353,21 @@ impl LsmStorageInner {
                 }
             }
         }
-        Ok(None)
+
+        // search by l1 sst
+        // use l1 concat iter and bloom filter
+        let mut l1_sstables = Vec::with_capacity(snapshot.levels[0].1.len());
+        for idx in snapshot.levels[0].1.iter() {
+            let sst = snapshot.sstables[idx].clone();
+            l1_sstables.push(sst);
+        }
+        let l1_concat_iter =
+            SstConcatIterator::create_and_seek_to_key(l1_sstables, KeySlice::from_slice(_key))?;
+        if l1_concat_iter.is_valid() && l1_concat_iter.key().raw_ref() == _key {
+            Ok(Some(Bytes::copy_from_slice(l1_concat_iter.value())))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -485,7 +500,7 @@ impl LsmStorageInner {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        // use clone make a unchanged snapshot to get, minimum time to hold the lock
+        // use clone make an unchanged snapshot to get, minimum time to hold the lock
         let snapshot = {
             let state = self.state.read();
             Arc::clone(&state)
@@ -498,7 +513,7 @@ impl LsmStorageInner {
         }
         let mmt_iters = MergeIterator::create(mmt_iters);
 
-        let mut sst_iters = Vec::with_capacity(snapshot.l0_sstables.len());
+        let mut sst_l0_iters = Vec::with_capacity(snapshot.l0_sstables.len());
         for idx in snapshot.l0_sstables.iter() {
             let sst = snapshot.sstables[idx].clone();
             if range_overlap(
@@ -523,12 +538,36 @@ impl LsmStorageInner {
                     }
                     Bound::Unbounded => SsTableIterator::create_and_seek_to_first(sst)?,
                 };
-                sst_iters.push(Box::new(iter));
+                sst_l0_iters.push(Box::new(iter));
             }
         }
-        let sst_iters = MergeIterator::create(sst_iters);
+        let sst_l0_iters = MergeIterator::create(sst_l0_iters);
+        let two_merge_iters = TwoMergeIterator::create(mmt_iters, sst_l0_iters)?;
 
-        let iters = TwoMergeIterator::create(mmt_iters, sst_iters)?;
+        // create l1_sstables merge concat iter
+        let mut l1_sstables = Vec::with_capacity(snapshot.levels[0].1.len());
+        for idx in snapshot.levels[0].1.iter() {
+            let sst = snapshot.sstables[idx].clone();
+            l1_sstables.push(sst);
+        }
+        let sst_l1_iters = match _lower {
+            Bound::Included(key) => {
+                SstConcatIterator::create_and_seek_to_key(l1_sstables, KeySlice::from_slice(key))?
+            }
+            Bound::Excluded(key) => {
+                let mut iter = SstConcatIterator::create_and_seek_to_key(
+                    l1_sstables,
+                    KeySlice::from_slice(key),
+                )?;
+                if iter.is_valid() && iter.key().raw_ref() == key {
+                    iter.next()?;
+                }
+                iter
+            }
+            Bound::Unbounded => SstConcatIterator::create_and_seek_to_first(l1_sstables)?,
+        };
+
+        let iters = TwoMergeIterator::create(two_merge_iters, sst_l1_iters)?;
         let iters = FusedIterator::new(LsmIterator::new(iters, map_bound(_upper))?);
         Ok(iters)
     }

@@ -8,7 +8,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
 use anyhow::Result;
 pub use leveled::{LeveledCompactionController, LeveledCompactionOptions, LeveledCompactionTask};
@@ -118,25 +120,33 @@ impl LsmStorageInner {
         };
 
         let mut new_sst = Vec::new();
-        // use all l0 and l1 sstable, make a merge iterator
+        // use all l0 and l1 sstable, make a two merge iterator with merge l0 sst iter and l1 concat sst iter
         let mut iter = match _task {
             CompactionTask::ForceFullCompaction {
                 l0_sstables,
                 l1_sstables,
             } => {
-                let mut iters = Vec::with_capacity(l0_sstables.len() + l1_sstables.len());
-                for idx in l0_sstables.iter().chain(l1_sstables.iter()) {
+                let mut l0_iters = Vec::with_capacity(l0_sstables.len());
+                for idx in l0_sstables.iter() {
                     let sst = snapshot.sstables[idx].clone();
-                    iters.push(Box::new(SsTableIterator::create_and_seek_to_first(sst)?));
+                    l0_iters.push(Box::new(SsTableIterator::create_and_seek_to_first(sst)?));
                 }
-                MergeIterator::create(iters)
+                let l0_iters = MergeIterator::create(l0_iters);
+
+                let mut l1_iters = Vec::with_capacity(l1_sstables.len());
+                for idx in l1_sstables.iter() {
+                    let sst = snapshot.sstables[idx].clone();
+                    l1_iters.push(sst);
+                }
+                let l1_iters = SstConcatIterator::create_and_seek_to_first(l1_iters)?;
+                TwoMergeIterator::create(l0_iters, l1_iters)?
             }
             _ => unimplemented!(),
         };
 
         // use merge iterator, scan all key-value pair
         // refactor to sort compact sst
-        // 1. sorted, by merger iter, the next one sequence is sorted
+        // 1. sorted, by two merger iter, the next one sequence is sorted
         // 2. same key, just choose the latest one
         // 3. delete tombstone, skip it
         let mut builder = SsTableBuilder::new(self.options.block_size);
@@ -194,11 +204,13 @@ impl LsmStorageInner {
             let state_lock = self.state_lock.lock();
             let mut state = self.state.write();
             let mut snapshot = state.as_ref().clone();
+
             // remove the old sst in sstables hashmap
             for sst in l0_remove.iter().chain(l1_remove.iter()) {
                 let result = snapshot.sstables.remove(sst);
                 assert!(result.is_some());
             }
+
             // add new sst to sstables hashmap
             let mut ids = Vec::with_capacity(new_ssts.len());
             for new_sst in new_ssts {
@@ -206,6 +218,7 @@ impl LsmStorageInner {
                 snapshot.sstables.insert(new_sst.sst_id(), new_sst);
             }
             assert_eq!(l1_remove, snapshot.levels[0].1);
+
             // update the level struct
             snapshot.levels[0].1 = ids;
             // remove the compacted l0 sstable id in l0_sstables struct
@@ -216,6 +229,7 @@ impl LsmStorageInner {
                 .filter(|x| !remove_id_set.remove(x))
                 .copied()
                 .collect();
+
             // check whether all ids are removed
             assert!(remove_id_set.is_empty());
             *state = Arc::new(snapshot);

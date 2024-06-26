@@ -27,7 +27,7 @@ impl SstConcatIterator {
 
         Ok(Self {
             current: Some(current),
-            next_sst_idx: 0,
+            next_sst_idx: 1,
             sstables,
         })
     }
@@ -48,8 +48,7 @@ impl SstConcatIterator {
         }) {
             Ok(index) => (index, Some(sstables[index].clone())),
             Err(index) => {
-                if index == 0
-                {
+                if index == 0 {
                     (index, Some(sstables[index].clone()))
                 } else {
                     (0, None)
