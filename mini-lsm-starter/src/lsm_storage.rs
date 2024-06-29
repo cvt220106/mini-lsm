@@ -491,8 +491,14 @@ impl LsmStorageInner {
             let mem = snapshot.imm_memtables.pop().unwrap();
             // add some check logic
             assert_eq!(mem.id(), sst_id);
-            // flush the l0_sstables
-            snapshot.l0_sstables.insert(0, sst_id);
+            // use self.compaction_controller.flush_to_l0() to know whether to flush to L0
+            if self.compaction_controller.flush_to_l0() {
+                // flush the l0_sstables
+                snapshot.l0_sstables.insert(0, sst_id);
+            } else {
+                // in tiered compaction, directly flush to level
+                snapshot.levels.insert(0, (sst_id, vec![sst_id]));
+            }
             println!("flushed {}.sst with size={}", sst_id, sst.table_size());
             snapshot.sstables.insert(sst_id, sst);
             // update lsm storage state

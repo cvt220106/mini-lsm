@@ -139,7 +139,7 @@ impl LsmStorageInner {
                 }
                 let l1_iters = SstConcatIterator::create_and_seek_to_first(l1_iters)?;
 
-                self.use_iter_build_new_ssts(TwoMergeIterator::create(l0_iters, l1_iters)?)
+                self.use_iter_build_new_ssts(TwoMergeIterator::create(l0_iters, l1_iters)?, true)
             }
             CompactionTask::Simple(simple_leveled) => match simple_leveled.upper_level {
                 Some(_) => {
@@ -159,7 +159,10 @@ impl LsmStorageInner {
                     }
                     let lower_iter = SstConcatIterator::create_and_seek_to_first(lower_sst)?;
 
-                    self.use_iter_build_new_ssts(TwoMergeIterator::create(upper_iter, lower_iter)?)
+                    self.use_iter_build_new_ssts(
+                        TwoMergeIterator::create(upper_iter, lower_iter)?,
+                        simple_leveled.is_lower_level_bottom_level,
+                    )
                 }
                 None => {
                     let mut upper_sst =
@@ -178,9 +181,31 @@ impl LsmStorageInner {
                     }
                     let lower_iter = SstConcatIterator::create_and_seek_to_first(lower_sst)?;
 
-                    self.use_iter_build_new_ssts(TwoMergeIterator::create(upper_iter, lower_iter)?)
+                    self.use_iter_build_new_ssts(
+                        TwoMergeIterator::create(upper_iter, lower_iter)?,
+                        simple_leveled.is_lower_level_bottom_level,
+                    )
                 }
             },
+            CompactionTask::Tiered(TieredCompactionTask {
+                tiers,
+                bottom_tier_included,
+            }) => {
+                let mut tiers_iter = Vec::with_capacity(tiers.len());
+                for (_, files) in tiers.iter() {
+                    let mut ssts = Vec::with_capacity(files.len());
+                    for idx in files {
+                        let sst = snapshot.sstables[idx].clone();
+                        ssts.push(sst);
+                    }
+                    let tier_iter = SstConcatIterator::create_and_seek_to_first(ssts)?;
+                    tiers_iter.push(Box::new(tier_iter));
+                }
+                self.use_iter_build_new_ssts(
+                    MergeIterator::create(tiers_iter),
+                    *bottom_tier_included,
+                )
+            }
             _ => unimplemented!(),
         }
     }
@@ -188,6 +213,7 @@ impl LsmStorageInner {
     fn use_iter_build_new_ssts(
         &self,
         mut iter: impl for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>,
+        compact_to_bottom_level: bool,
     ) -> Result<Vec<Arc<SsTable>>> {
         // use merge iterator, scan all key-value pair
         // refactor to sort compact sst
@@ -196,16 +222,17 @@ impl LsmStorageInner {
         // 3. delete tombstone, skip it
         let mut new_sst = Vec::new();
         let mut builder = SsTableBuilder::new(self.options.block_size);
-        let mut previous_key = Vec::new();
 
         while iter.is_valid() {
-            if iter.value().is_empty()
-                || (!previous_key.is_empty() && iter.key().raw_ref() == previous_key.as_slice())
-            {
-                iter.next()?;
-                continue;
+            if compact_to_bottom_level {
+                // represent different empty value process idea
+                if !iter.value().is_empty() {
+                    builder.add(iter.key(), iter.value());
+                }
+            } else {
+                builder.add(iter.key(), iter.value());
             }
-            builder.add(iter.key(), iter.value());
+            iter.next()?;
             if builder.estimated_size() >= self.options.target_sst_size {
                 // attach the size limit, split the sstable file
                 let new_builder = SsTableBuilder::new(self.options.block_size);
@@ -219,7 +246,6 @@ impl LsmStorageInner {
                 )?;
                 new_sst.push(Arc::new(sst));
             }
-            iter.next()?;
         }
 
         // the last sst, need extra process to build
