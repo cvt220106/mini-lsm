@@ -98,7 +98,7 @@ impl StorageIterator for SstConcatIterator {
         if !self.current.as_ref().unwrap().is_valid() {
             // move to next sst
             // judge the next_sst_idx validation
-            if self.next_sst_idx == self.sstables.len() {
+            if self.next_sst_idx >= self.sstables.len() {
                 // if it's not in range, make the current as None, return
                 self.current = None;
                 return Ok(());

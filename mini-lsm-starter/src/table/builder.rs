@@ -90,7 +90,7 @@ impl SsTableBuilder {
         // the last block in add func, we not process it!!
         // we need process the last block data in here
         let mut sst = self;
-        &mut sst.process();
+        sst.process();
         let mut data = sst.data.clone();
         let meta = sst.meta.clone();
 
@@ -119,6 +119,10 @@ impl SsTableBuilder {
             bloom: Some(bloom),
             max_ts: 0,
         })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entity_num == 0
     }
 
     #[cfg(test)]

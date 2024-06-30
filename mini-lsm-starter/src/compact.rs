@@ -127,63 +127,72 @@ impl LsmStorageInner {
                 // make a two merge iterator with merge l0 sst iter and l1 concat sst iter
                 let mut l0_iters = Vec::with_capacity(l0_sstables.len());
                 for idx in l0_sstables.iter() {
-                    let sst = snapshot.sstables[idx].clone();
+                    let sst = snapshot.sstables.get(idx).unwrap().clone();
                     l0_iters.push(Box::new(SsTableIterator::create_and_seek_to_first(sst)?));
                 }
                 let l0_iters = MergeIterator::create(l0_iters);
 
                 let mut l1_iters = Vec::with_capacity(l1_sstables.len());
                 for idx in l1_sstables.iter() {
-                    let sst = snapshot.sstables[idx].clone();
+                    let sst = snapshot.sstables.get(idx).unwrap().clone();
                     l1_iters.push(sst);
                 }
                 let l1_iters = SstConcatIterator::create_and_seek_to_first(l1_iters)?;
 
                 self.use_iter_build_new_ssts(TwoMergeIterator::create(l0_iters, l1_iters)?, true)
             }
-            CompactionTask::Simple(simple_leveled) => match simple_leveled.upper_level {
+            CompactionTask::Simple(SimpleLeveledCompactionTask {
+                upper_level,
+                upper_level_sst_ids,
+                lower_level: _,
+                lower_level_sst_ids,
+                is_lower_level_bottom_level,
+            })
+            | CompactionTask::Leveled(LeveledCompactionTask {
+                upper_level,
+                upper_level_sst_ids,
+                lower_level: _,
+                lower_level_sst_ids,
+                is_lower_level_bottom_level,
+            }) => match upper_level {
                 Some(_) => {
-                    let mut upper_sst =
-                        Vec::with_capacity(simple_leveled.upper_level_sst_ids.len());
-                    for idx in simple_leveled.upper_level_sst_ids.iter() {
-                        let sst = snapshot.sstables[idx].clone();
+                    let mut upper_sst = Vec::with_capacity(upper_level_sst_ids.len());
+                    for idx in upper_level_sst_ids.iter() {
+                        let sst = snapshot.sstables.get(idx).unwrap().clone();
                         upper_sst.push(sst);
                     }
                     let upper_iter = SstConcatIterator::create_and_seek_to_first(upper_sst)?;
 
-                    let mut lower_sst =
-                        Vec::with_capacity(simple_leveled.lower_level_sst_ids.len());
-                    for idx in simple_leveled.lower_level_sst_ids.iter() {
-                        let sst = snapshot.sstables[idx].clone();
+                    let mut lower_sst = Vec::with_capacity(lower_level_sst_ids.len());
+                    for idx in lower_level_sst_ids.iter() {
+                        let sst = snapshot.sstables.get(idx).unwrap().clone();
                         lower_sst.push(sst);
                     }
                     let lower_iter = SstConcatIterator::create_and_seek_to_first(lower_sst)?;
 
                     self.use_iter_build_new_ssts(
                         TwoMergeIterator::create(upper_iter, lower_iter)?,
-                        simple_leveled.is_lower_level_bottom_level,
+                        *is_lower_level_bottom_level,
                     )
                 }
                 None => {
-                    let mut upper_sst =
-                        Vec::with_capacity(simple_leveled.upper_level_sst_ids.len());
-                    for idx in simple_leveled.upper_level_sst_ids.iter() {
-                        let sst = snapshot.sstables[idx].clone();
+                    let mut upper_sst = Vec::with_capacity(upper_level_sst_ids.len());
+                    for idx in upper_level_sst_ids.iter() {
+                        let sst = snapshot.sstables.get(idx).unwrap().clone();
                         upper_sst.push(Box::new(SsTableIterator::create_and_seek_to_first(sst)?));
                     }
                     let upper_iter = MergeIterator::create(upper_sst);
 
-                    let mut lower_sst =
-                        Vec::with_capacity(simple_leveled.lower_level_sst_ids.len());
-                    for idx in simple_leveled.lower_level_sst_ids.iter() {
-                        let sst = snapshot.sstables[idx].clone();
+                    let mut lower_sst = Vec::with_capacity(lower_level_sst_ids.len());
+                    for idx in lower_level_sst_ids.iter() {
+                        let sst = snapshot.sstables.get(idx).unwrap().clone();
                         lower_sst.push(sst);
                     }
                     let lower_iter = SstConcatIterator::create_and_seek_to_first(lower_sst)?;
 
                     self.use_iter_build_new_ssts(
                         TwoMergeIterator::create(upper_iter, lower_iter)?,
-                        simple_leveled.is_lower_level_bottom_level,
+                        *is_lower_level_bottom_level,
                     )
                 }
             },
@@ -195,7 +204,7 @@ impl LsmStorageInner {
                 for (_, files) in tiers.iter() {
                     let mut ssts = Vec::with_capacity(files.len());
                     for idx in files {
-                        let sst = snapshot.sstables[idx].clone();
+                        let sst = snapshot.sstables.get(idx).unwrap().clone();
                         ssts.push(sst);
                     }
                     let tier_iter = SstConcatIterator::create_and_seek_to_first(ssts)?;
@@ -206,7 +215,6 @@ impl LsmStorageInner {
                     *bottom_tier_included,
                 )
             }
-            _ => unimplemented!(),
         }
     }
 
@@ -249,13 +257,15 @@ impl LsmStorageInner {
         }
 
         // the last sst, need extra process to build
-        let sst_id = self.next_sst_id();
-        let sst = builder.build(
-            sst_id,
-            Some(self.block_cache.clone()),
-            self.path_of_sst(sst_id),
-        )?;
-        new_sst.push(Arc::new(sst));
+        if !builder.is_empty() {
+            let sst_id = self.next_sst_id();
+            let sst = builder.build(
+                sst_id,
+                Some(self.block_cache.clone()),
+                self.path_of_sst(sst_id),
+            )?;
+            new_sst.push(Arc::new(sst));
+        }
 
         Ok(new_sst)
     }
@@ -335,6 +345,12 @@ impl LsmStorageInner {
         let sst_to_remove = {
             let _state_lock = self.state_lock.lock();
             let mut snapshot = self.state.read().as_ref().clone();
+            // add new ssts
+            for sst in new_ssts {
+                let result = snapshot.sstables.insert(sst.sst_id(), sst);
+                assert!(result.is_none());
+            }
+
             let (mut snapshot, sst_id_to_remove) = self
                 .compaction_controller
                 .apply_compaction_result(&snapshot, &task, &output);
@@ -344,11 +360,6 @@ impl LsmStorageInner {
                 let result = snapshot.sstables.remove(sst);
                 assert!(result.is_some());
                 sst_to_remove.push(result.unwrap());
-            }
-            // add new ssts
-            for sst in new_ssts {
-                let result = snapshot.sstables.insert(sst.sst_id(), sst);
-                assert!(result.is_none());
             }
 
             let mut state = self.state.write();
@@ -396,10 +407,11 @@ impl LsmStorageInner {
     }
 
     fn trigger_flush(&self) -> Result<()> {
-        if {
+        let res = {
             let state = self.state.read();
-            state.imm_memtables.len() + 1 >= self.options.num_memtable_limit
-        } {
+            state.imm_memtables.len() >= self.options.num_memtable_limit
+        };
+        if res {
             self.force_flush_next_imm_memtable()?;
         }
 
