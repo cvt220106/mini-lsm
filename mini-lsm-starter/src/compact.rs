@@ -14,6 +14,7 @@ use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
 use crate::key::KeySlice;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 use anyhow::Result;
 pub use leveled::{LeveledCompactionController, LeveledCompactionOptions, LeveledCompactionTask};
@@ -73,10 +74,11 @@ impl CompactionController {
         snapshot: &LsmStorageState,
         task: &CompactionTask,
         output: &[usize],
+        in_recovery: bool,
     ) -> (LsmStorageState, Vec<usize>) {
         match (self, task) {
             (CompactionController::Leveled(ctrl), CompactionTask::Leveled(task)) => {
-                ctrl.apply_compaction_result(snapshot, task, output)
+                ctrl.apply_compaction_result(snapshot, task, output, in_recovery)
             }
             (CompactionController::Simple(ctrl), CompactionTask::Simple(task)) => {
                 ctrl.apply_compaction_result(snapshot, task, output)
@@ -345,15 +347,18 @@ impl LsmStorageInner {
         let sst_to_remove = {
             let _state_lock = self.state_lock.lock();
             let mut snapshot = self.state.read().as_ref().clone();
+            // add to manifest
+            let mut new_sst_ids = Vec::with_capacity(new_ssts.len());
             // add new ssts
             for sst in new_ssts {
+                new_sst_ids.push(sst.sst_id());
                 let result = snapshot.sstables.insert(sst.sst_id(), sst);
                 assert!(result.is_none());
             }
 
             let (mut snapshot, sst_id_to_remove) = self
                 .compaction_controller
-                .apply_compaction_result(&snapshot, &task, &output);
+                .apply_compaction_result(&snapshot, &task, &output, false);
             // remove old ssts
             let mut sst_to_remove = Vec::with_capacity(sst_id_to_remove.len());
             for sst in sst_id_to_remove.iter() {
@@ -364,6 +369,14 @@ impl LsmStorageInner {
 
             let mut state = self.state.write();
             *state = Arc::new(snapshot);
+            drop(state);
+
+            self.sync_dir()?;
+            self.manifest
+                .as_ref()
+                .unwrap()
+                .add_record(&_state_lock, ManifestRecord::Compaction(task, new_sst_ids))?;
+
             sst_to_remove
         };
         println!(
@@ -378,6 +391,8 @@ impl LsmStorageInner {
         for sst in sst_to_remove {
             std::fs::remove_file(self.path_of_sst(sst.sst_id()))?;
         }
+        self.sync_dir()?;
+
         Ok(())
     }
 

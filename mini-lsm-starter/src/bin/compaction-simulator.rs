@@ -562,7 +562,7 @@ fn main() {
                     );
                     max_space = max_space.max(storage.file_list.len());
                     let (snapshot, del) =
-                        controller.apply_compaction_result(&storage.snapshot, &task, &sst_ids);
+                        controller.apply_compaction_result(&storage.snapshot, &task, &sst_ids, false);
                     storage.snapshot = snapshot;
                     storage.remove(&del);
                     println!("--- After Compaction ---");
