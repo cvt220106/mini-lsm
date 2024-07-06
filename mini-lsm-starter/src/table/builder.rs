@@ -82,17 +82,16 @@ impl SsTableBuilder {
 
     /// Builds the SSTable and writes it to the given path. Use the `FileObject` structure to manipulate the disk objects.
     pub fn build(
-        self,
+        mut self,
         id: usize,
         block_cache: Option<Arc<BlockCache>>,
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
         // the last block in add func, we not process it!!
         // we need process the last block data in here
-        let mut sst = self;
-        sst.process();
-        let mut data = sst.data.clone();
-        let meta = sst.meta.clone();
+        self.process();
+        let mut data = self.data;
+        let meta = self.meta;
 
         // add block meta data to data storage
         let meta_offset = data.len() as u32;
@@ -100,8 +99,8 @@ impl SsTableBuilder {
         data.put_u32(meta_offset);
 
         // make a bloom filter
-        let bits_per_key = Bloom::bloom_bits_per_key(sst.entity_num, FALSE_PR);
-        let bloom = Bloom::build_from_key_hashes(sst.key_hashes.as_slice(), bits_per_key);
+        let bits_per_key = Bloom::bloom_bits_per_key(self.entity_num, FALSE_PR);
+        let bloom = Bloom::build_from_key_hashes(self.key_hashes.as_slice(), bits_per_key);
         // add bloom filter info to data storage
         let bloom_offset = data.len() as u32;
         bloom.encode(&mut data);
@@ -114,15 +113,11 @@ impl SsTableBuilder {
             block_meta_offset: meta_offset as usize,
             id,
             block_cache,
-            first_key: KeyBytes::from_bytes(sst.first_key.into()),
-            last_key: KeyBytes::from_bytes(sst.last_key.into()),
+            first_key: KeyBytes::from_bytes(self.first_key.into()),
+            last_key: KeyBytes::from_bytes(self.last_key.into()),
             bloom: Some(bloom),
             max_ts: 0,
         })
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entity_num == 0
     }
 
     #[cfg(test)]

@@ -231,25 +231,29 @@ impl LsmStorageInner {
         // 2. same key, just choose the latest one
         // 3. delete tombstone, skip it
         let mut new_sst = Vec::new();
-        let mut builder = SsTableBuilder::new(self.options.block_size);
+        let mut builder = None;
 
         while iter.is_valid() {
+            if builder.is_none() {
+                builder = Some(SsTableBuilder::new(self.options.block_size));
+            }
+            let builder_inner = builder.as_mut().unwrap();
             if compact_to_bottom_level {
                 // represent different empty value process idea
                 if !iter.value().is_empty() {
-                    builder.add(iter.key(), iter.value());
+                    builder_inner.add(iter.key(), iter.value());
                 }
             } else {
-                builder.add(iter.key(), iter.value());
+                builder_inner.add(iter.key(), iter.value());
             }
             iter.next()?;
-            if builder.estimated_size() >= self.options.target_sst_size {
+
+            if builder_inner.estimated_size() >= self.options.target_sst_size {
                 // attach the size limit, split the sstable file
-                let new_builder = SsTableBuilder::new(self.options.block_size);
-                let old_builder = std::mem::replace(&mut builder, new_builder);
+                let builder = builder.take().unwrap();
 
                 let sst_id = self.next_sst_id();
-                let sst = old_builder.build(
+                let sst = builder.build(
                     sst_id,
                     Some(self.block_cache.clone()),
                     self.path_of_sst(sst_id),
@@ -259,7 +263,7 @@ impl LsmStorageInner {
         }
 
         // the last sst, need extra process to build
-        if !builder.is_empty() {
+        if let Some(builder) = builder {
             let sst_id = self.next_sst_id();
             let sst = builder.build(
                 sst_id,

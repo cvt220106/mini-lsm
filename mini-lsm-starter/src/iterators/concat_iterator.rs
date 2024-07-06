@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -25,11 +24,14 @@ impl SstConcatIterator {
         let current_sst = sstables[0].clone();
         let current = SsTableIterator::create_and_seek_to_first(current_sst)?;
 
-        Ok(Self {
+        let mut iter = Self {
             current: Some(current),
             next_sst_idx: 1,
             sstables,
-        })
+        };
+        iter.move_until_valid()?;
+
+        Ok(iter)
     }
 
     pub fn create_and_seek_to_key(sstables: Vec<Arc<SsTable>>, key: KeySlice) -> Result<Self> {
@@ -37,36 +39,24 @@ impl SstConcatIterator {
             return Self::create_with_none(sstables);
         }
         // use binary search, quick find sstable contain this key
-        let (sst_idx, current_sst) = match sstables.binary_search_by(|sst| {
-            if key < sst.first_key().as_key_slice() {
-                Ordering::Greater
-            } else if key > sst.last_key().as_key_slice() {
-                Ordering::Less
-            } else {
-                Ordering::Equal
-            }
-        }) {
-            Ok(index) => (index, Some(sstables[index].clone())),
-            Err(index) => {
-                if index == 0 {
-                    (index, Some(sstables[index].clone()))
-                } else {
-                    (0, None)
-                }
-            }
-        };
+        let idx = sstables
+            .partition_point(|table| table.first_key().as_key_slice() <= key)
+            .saturating_sub(1);
 
-        if current_sst.is_none() {
+        if idx >= sstables.len() {
             return Self::create_with_none(sstables);
         }
 
-        let current = SsTableIterator::create_and_seek_to_key(current_sst.unwrap(), key)?;
+        let current = SsTableIterator::create_and_seek_to_key(sstables[idx].clone(), key)?;
 
-        Ok(Self {
+        let mut iter = Self {
             current: Some(current),
-            next_sst_idx: sst_idx + 1,
+            next_sst_idx: idx + 1,
             sstables,
-        })
+        };
+        iter.move_until_valid()?;
+
+        Ok(iter)
     }
 
     fn create_with_none(sstables: Vec<Arc<SsTable>>) -> Result<Self> {
@@ -75,6 +65,23 @@ impl SstConcatIterator {
             next_sst_idx: 0,
             sstables,
         })
+    }
+
+    fn move_until_valid(&mut self) -> Result<()> {
+        while let Some(iter) = self.current.as_mut() {
+            if iter.is_valid() {
+                break;
+            }
+            if self.next_sst_idx >= self.sstables.len() {
+                self.current = None;
+            } else {
+                let current = SsTableIterator::create_and_seek_to_first(self.sstables[self.next_sst_idx].clone())?;
+                self.current = Some(current);
+                self.next_sst_idx += 1;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -95,18 +102,7 @@ impl StorageIterator for SstConcatIterator {
 
     fn next(&mut self) -> Result<()> {
         self.current.as_mut().unwrap().next()?;
-        if !self.current.as_ref().unwrap().is_valid() {
-            // move to next sst
-            // judge the next_sst_idx validation
-            if self.next_sst_idx >= self.sstables.len() {
-                // if it's not in range, make the current as None, return
-                self.current = None;
-                return Ok(());
-            }
-            let next_sst = self.sstables[self.next_sst_idx].clone();
-            self.current = Some(SsTableIterator::create_and_seek_to_first(next_sst)?);
-            self.next_sst_idx += 1;
-        }
+        self.move_until_valid()?;
 
         Ok(())
     }

@@ -226,9 +226,7 @@ impl SsTable {
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
         self.block_meta
-            .partition_point(|meta| {
-                meta.first_key.as_key_slice() <= key && meta.last_key.as_key_slice() >= key
-            })
+            .partition_point(|meta| meta.first_key.as_key_slice() <= key)
             .saturating_sub(1)
     }
 
