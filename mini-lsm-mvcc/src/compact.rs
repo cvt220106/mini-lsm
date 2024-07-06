@@ -73,10 +73,11 @@ impl CompactionController {
         snapshot: &LsmStorageState,
         task: &CompactionTask,
         output: &[usize],
+        in_recovery: bool,
     ) -> (LsmStorageState, Vec<usize>) {
         match (self, task) {
             (CompactionController::Leveled(ctrl), CompactionTask::Leveled(task)) => {
-                ctrl.apply_compaction_result(snapshot, task, output)
+                ctrl.apply_compaction_result(snapshot, task, output, in_recovery)
             }
             (CompactionController::Simple(ctrl), CompactionTask::Simple(task)) => {
                 ctrl.apply_compaction_result(snapshot, task, output)
@@ -330,7 +331,7 @@ impl LsmStorageInner {
                 assert!(result.is_none());
             }
             assert_eq!(l1_sstables, state.levels[0].1);
-            state.levels[0].1 = ids.clone();
+            state.levels[0].1.clone_from(&ids);
             let mut l0_sstables_map = l0_sstables.iter().copied().collect::<HashSet<_>>();
             state.l0_sstables = state
                 .l0_sstables
@@ -381,7 +382,8 @@ impl LsmStorageInner {
             }
             let (mut snapshot, files_to_remove) = self
                 .compaction_controller
-                .apply_compaction_result(&snapshot, &task, &output);
+                .apply_compaction_result(&snapshot, &task, &output, false);
+
             let mut ssts_to_remove = Vec::with_capacity(files_to_remove.len());
             for file_to_remove in &files_to_remove {
                 let result = snapshot.sstables.remove(file_to_remove);
