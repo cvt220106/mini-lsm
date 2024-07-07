@@ -525,27 +525,44 @@ impl LsmStorageInner {
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
     pub fn write_batch<T: AsRef<[u8]>>(&self, _batch: &[WriteBatchRecord<T>]) -> Result<()> {
-        unimplemented!()
+        for record in _batch {
+            match record {
+                WriteBatchRecord::Put(key, value) => {
+                    let key = key.as_ref();
+                    let value = value.as_ref();
+                    assert!(!key.is_empty(), "key cannot be empty");
+                    assert!(!value.is_empty(), "value cannot be empty");
+                    let size = {
+                        let state = self.state.read();
+                        state.memtable.put(key, value)?;
+                        state.memtable.approximate_size()
+                    };
+                    self.try_freeze(size)?;
+                }
+                WriteBatchRecord::Del(key) => {
+                    let key = key.as_ref();
+                    assert!(!key.is_empty(), "key cannot be empty");
+                    let size = {
+                        let state = self.state.read();
+                        state.memtable.put(key, b"")?;
+                        state.memtable.approximate_size()
+                    };
+                    self.try_freeze(size)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        let state = self.state.read();
-        state.memtable.put(_key, _value)?;
-        let size = state.memtable.approximate_size();
-        drop(state);
-        self.try_freeze(size)?;
-        Ok(())
+        self.write_batch(&[WriteBatchRecord::Put(_key, _value)])
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        let state = self.state.read();
-        state.memtable.put(_key, &[])?;
-        let size = state.memtable.approximate_size();
-        drop(state);
-        self.try_freeze(size)?;
-        Ok(())
+        self.write_batch(&[WriteBatchRecord::Del(_key)])
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {

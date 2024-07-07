@@ -60,7 +60,12 @@ impl SsTableBuilder {
         // update other
         let (first_key, last_key) = block.first_and_last_key();
         let offset = self.data.len();
-        self.data.put(block.build().encode());
+        let block = block.build();
+        self.data.put(block.encode());
+        // add block check sum
+        let block_checksum = crc32fast::hash(block.encode().as_ref());
+        self.data.put_u32(block_checksum);
+
         if self.meta.is_empty() {
             self.first_key = first_key.raw_ref().to_vec();
         }
@@ -95,6 +100,8 @@ impl SsTableBuilder {
 
         // add block meta data to data storage
         let meta_offset = data.len() as u32;
+        // block meta add the number of block to as a help
+        data.put_u32(meta.len() as u32);
         BlockMeta::encode_block_meta(meta.as_slice(), &mut data);
         data.put_u32(meta_offset);
 

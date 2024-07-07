@@ -3,6 +3,7 @@ mod builder;
 mod iterator;
 
 use std::fs::File;
+use std::mem::size_of;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -37,18 +38,19 @@ impl BlockMeta {
         let mut estimated_size = 0;
         for block_meta in block_metas.iter() {
             // the size of offset len
-            estimated_size += std::mem::size_of::<u32>();
+            estimated_size += size_of::<u32>();
             // the size of first_key_len
-            estimated_size += std::mem::size_of::<u16>();
+            estimated_size += size_of::<u16>();
             // the size of first_key
             estimated_size += block_meta.first_key.len();
             // the size of last_key_len
-            estimated_size += std::mem::size_of::<u16>();
+            estimated_size += size_of::<u16>();
             // the size of last_key
             estimated_size += block_meta.last_key.len();
         }
 
-        buf.reserve(estimated_size);
+        let offset = buf.len();
+        buf.reserve(estimated_size + size_of::<u32>());
         for block_meta in block_metas.iter() {
             // | offset(4b) | first_key_len(2b) | first_key | last_key_len(2b) | last_key |
             // add the offset
@@ -60,12 +62,17 @@ impl BlockMeta {
             buf.put_u16(block_meta.last_key.len() as u16);
             buf.put(block_meta.last_key.raw_ref());
         }
+        // add the check sum
+        let check_sum = crc32fast::hash(&buf[offset..]);
+        buf.put_u32(check_sum);
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(mut buf: impl Buf) -> Vec<BlockMeta> {
+    pub fn decode_block_meta(mut buf: &[u8]) -> Vec<BlockMeta> {
+        let num = buf.get_u32() as usize;
         let mut block_metas = Vec::new();
-        while buf.has_remaining() {
+        let check_sum = crc32fast::hash(&buf[..buf.remaining() - 4]);
+        for _ in 0..num {
             let offset = buf.get_u32() as usize;
             let first_key_len = buf.get_u16() as usize;
             let first_key = KeyBytes::from_bytes(buf.copy_to_bytes(first_key_len));
@@ -77,6 +84,7 @@ impl BlockMeta {
                 last_key,
             })
         }
+        assert_eq!(check_sum, buf.get_u32());
 
         block_metas
     }
@@ -205,8 +213,10 @@ impl SsTable {
         };
 
         let data = self.file.read(offset as u64, len as u64)?;
+        let check_sum = (&data[data.len() - size_of::<u32>()..]).get_u32();
+        assert_eq!(check_sum, crc32fast::hash(&data[..data.len() - size_of::<u32>()]));
 
-        Ok(Arc::new(Block::decode(data.as_slice())))
+        Ok(Arc::new(Block::decode(&data[..data.len() - size_of::<u32>()])))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
