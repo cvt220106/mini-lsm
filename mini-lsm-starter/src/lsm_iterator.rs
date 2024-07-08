@@ -1,6 +1,5 @@
 use anyhow::{bail, Result};
 use bytes::Bytes;
-use nom::AsBytes;
 use std::ops::Bound;
 
 use crate::iterators::concat_iterator::SstConcatIterator;
@@ -51,12 +50,16 @@ impl LsmIterator {
         }
         match self.end_bound.as_ref() {
             Bound::Unbounded => {}
-            Bound::Included(key) => self.is_valid = self.key() <= key.as_bytes(),
-            Bound::Excluded(key) => self.is_valid = self.key() < key.as_bytes(),
+            Bound::Included(key) => self.is_valid = self.key() <= key.as_ref(),
+            Bound::Excluded(key) => self.is_valid = self.key() < key.as_ref(),
         }
 
         Ok(())
     }
+
+    // because we add ts, same key but ts is not same, so we need process this situation
+    // just return latest ts key
+
 }
 
 impl StorageIterator for LsmIterator {
@@ -67,7 +70,7 @@ impl StorageIterator for LsmIterator {
     }
 
     fn key(&self) -> &[u8] {
-        self.inner.key().raw_ref()
+        self.inner.key().key_ref()
     }
 
     fn value(&self) -> &[u8] {

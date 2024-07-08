@@ -42,8 +42,10 @@ impl BlockBuilder {
             self.last_key = key.to_key_vec();
 
             // especially store first key-value
-            self.data.put_u16(key.len() as u16);
-            self.data.put(key.raw_ref());
+            self.data.put_u16(key.key_len() as u16);
+            self.data.put(key.key_ref());
+            // in mvcc, we add timestamp info
+            self.data.put_u64(key.ts());
             // value_len
             self.data.put_u16(value_len);
             // value
@@ -54,7 +56,7 @@ impl BlockBuilder {
         }
 
         let (key_overlap_len, rest_key_len, rest_key) =
-            Self::key_prefix_compaction(self.first_key.raw_ref(), key.raw_ref());
+            Self::key_prefix_compaction(self.first_key.key_ref(), key.key_ref());
         let add_len = rest_key_len + value_len + LEN_VAR_SIZE as u16 * 4;
         if add_len as usize + self.current_size() > self.block_size {
             return false;
@@ -68,6 +70,8 @@ impl BlockBuilder {
         self.data.put_u16(rest_key_len);
         // rest_key
         self.data.put(rest_key);
+        // in mvcc, we add timestamp info
+        self.data.put_u64(key.ts());
         // value_len
         self.data.put_u16(value_len);
         // value

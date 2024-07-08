@@ -5,7 +5,7 @@ use anyhow::Result;
 use bytes::BufMut;
 
 use super::{BlockMeta, FileObject, SsTable};
-use crate::key::KeyBytes;
+use crate::key::{KeyVec};
 use crate::table::bloom::Bloom;
 use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
 
@@ -13,8 +13,8 @@ const FALSE_PR: f64 = 0.01_f64;
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
     builder: BlockBuilder,
-    first_key: Vec<u8>,
-    last_key: Vec<u8>,
+    first_key: KeyVec,
+    last_key: KeyVec,
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
     block_size: usize,
@@ -27,8 +27,8 @@ impl SsTableBuilder {
     pub fn new(block_size: usize) -> Self {
         Self {
             builder: BlockBuilder::new(block_size),
-            first_key: Vec::new(),
-            last_key: Vec::new(),
+            first_key: KeyVec::new(),
+            last_key: KeyVec::new(),
             data: Vec::new(),
             meta: Vec::new(),
             block_size,
@@ -47,7 +47,7 @@ impl SsTableBuilder {
             self.process();
         }
         // add key hash info
-        let h = farmhash::fingerprint32(key.raw_ref());
+        let h = farmhash::fingerprint32(key.key_ref());
         self.key_hashes.push(h);
         self.entity_num += 1;
     }
@@ -67,9 +67,9 @@ impl SsTableBuilder {
         self.data.put_u32(block_checksum);
 
         if self.meta.is_empty() {
-            self.first_key = first_key.raw_ref().to_vec();
+            self.first_key.set_from_slice(first_key.as_key_slice());
         }
-        self.last_key = last_key.raw_ref().to_vec();
+        self.last_key.set_from_slice(last_key.as_key_slice());
         self.meta.push(BlockMeta {
             offset,
             first_key,
@@ -120,8 +120,8 @@ impl SsTableBuilder {
             block_meta_offset: meta_offset as usize,
             id,
             block_cache,
-            first_key: KeyBytes::from_bytes(self.first_key.into()),
-            last_key: KeyBytes::from_bytes(self.last_key.into()),
+            first_key: self.first_key.into_key_bytes(),
+            last_key: self.last_key.into_key_bytes(),
             bloom: Some(bloom),
             max_ts: 0,
         })
