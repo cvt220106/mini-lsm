@@ -32,7 +32,7 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(block_metas: &[BlockMeta], buf: &mut Vec<u8>) {
+    pub fn encode_block_meta(block_metas: &[BlockMeta], max_ts: u64, buf: &mut Vec<u8>) {
         // compute estimated size of buf will put
         // reduce the time consume of Vec clone and move in memory extend
         let mut estimated_size = 0;
@@ -50,7 +50,7 @@ impl BlockMeta {
         }
 
         let offset = buf.len();
-        buf.reserve(estimated_size + size_of::<u32>());
+        buf.reserve(estimated_size + size_of::<u64>() + size_of::<u32>());
         for block_meta in block_metas.iter() {
             // | offset(4b) | first_key_len(2b) | first_key | last_key_len(2b) | last_key |
             // add the offset
@@ -65,12 +65,13 @@ impl BlockMeta {
             buf.put_u64(block_meta.last_key.ts());
         }
         // add the check sum
+        buf.put_u64(max_ts);
         let check_sum = crc32fast::hash(&buf[offset..]);
         buf.put_u32(check_sum);
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(mut buf: &[u8]) -> Vec<BlockMeta> {
+    pub fn decode_block_meta(mut buf: &[u8]) -> (Vec<BlockMeta>, u64) {
         let num = buf.get_u32() as usize;
         let mut block_metas = Vec::new();
         let check_sum = crc32fast::hash(&buf[..buf.remaining() - 4]);
@@ -88,9 +89,10 @@ impl BlockMeta {
                 last_key,
             })
         }
+        let max_ts = buf.get_u64();
         assert_eq!(check_sum, buf.get_u32());
 
-        block_metas
+        (block_metas, max_ts)
     }
 }
 
@@ -166,7 +168,7 @@ impl SsTable {
         };
 
         let meta_offset = file.read(bloom_offset - 4, 4)?.as_slice().get_u32() as u64;
-        let block_meta = BlockMeta::decode_block_meta(
+        let (block_meta, max_ts) = BlockMeta::decode_block_meta(
             file.read(meta_offset, bloom_offset - 4 - meta_offset)?
                 .as_slice(),
         );
@@ -183,7 +185,7 @@ impl SsTable {
             first_key,
             last_key,
             bloom,
-            max_ts: 0,
+            max_ts,
         })
     }
 

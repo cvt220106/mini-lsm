@@ -20,15 +20,17 @@ pub struct LsmIterator {
     inner: LsmIteratorInner,
     end_bound: Bound<Bytes>,
     is_valid: bool,
+    read_ts: u64,
     prev_key: Vec<u8>,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner, end: Bound<Bytes>) -> Result<Self> {
+    pub(crate) fn new(iter: LsmIteratorInner, end: Bound<Bytes>, read_ts: u64) -> Result<Self> {
         let mut iter = Self {
             is_valid: iter.is_valid(),
             inner: iter,
             end_bound: end,
+            read_ts,
             prev_key: Vec::new(),
         };
         iter.move_to_key()?;
@@ -42,13 +44,28 @@ impl LsmIterator {
             while self.inner.is_valid() && self.inner.key().key_ref() == self.prev_key {
                 self.next_inner()?;
             }
-
+            // key is invalid, means this iter is ending
             if !self.inner.is_valid() {
                 break;
             }
 
+            // use read_ts, move to correct version snapshot key
             self.prev_key.clear();
             self.prev_key.extend(self.inner.key().key_ref());
+            while self.inner.is_valid()
+                && self.inner.key().key_ref() == self.prev_key
+                && self.read_ts < self.inner.key().ts()
+            {
+                self.next_inner()?;
+            }
+            if !self.inner.is_valid() {
+                break;
+            }
+            // not have this version snapshot key, move to next key
+            if self.inner.key().key_ref() != self.prev_key {
+                continue;
+            }
+            // when value is not empty, break the loop, return this key
             if !self.inner.value().is_empty() {
                 break;
             }
