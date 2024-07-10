@@ -75,7 +75,9 @@ impl SstConcatIterator {
             if self.next_sst_idx >= self.sstables.len() {
                 self.current = None;
             } else {
-                let current = SsTableIterator::create_and_seek_to_first(self.sstables[self.next_sst_idx].clone())?;
+                let current = SsTableIterator::create_and_seek_to_first(
+                    self.sstables[self.next_sst_idx].clone(),
+                )?;
                 self.current = Some(current);
                 self.next_sst_idx += 1;
             }

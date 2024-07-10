@@ -77,9 +77,11 @@ impl BlockMeta {
         for _ in 0..num {
             let offset = buf.get_u32() as usize;
             let first_key_len = buf.get_u16() as usize;
-            let first_key = KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(first_key_len), buf.get_u64());
+            let first_key =
+                KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(first_key_len), buf.get_u64());
             let last_key_len = buf.get_u16() as usize;
-            let last_key = KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(last_key_len), buf.get_u64());
+            let last_key =
+                KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(last_key_len), buf.get_u64());
             block_metas.push(BlockMeta {
                 offset,
                 first_key,
@@ -216,9 +218,14 @@ impl SsTable {
 
         let data = self.file.read(offset as u64, len as u64)?;
         let check_sum = (&data[data.len() - size_of::<u32>()..]).get_u32();
-        assert_eq!(check_sum, crc32fast::hash(&data[..data.len() - size_of::<u32>()]));
+        assert_eq!(
+            check_sum,
+            crc32fast::hash(&data[..data.len() - size_of::<u32>()])
+        );
 
-        Ok(Arc::new(Block::decode(&data[..data.len() - size_of::<u32>()])))
+        Ok(Arc::new(Block::decode(
+            &data[..data.len() - size_of::<u32>()],
+        )))
     }
 
     /// Read a block from disk, with block cache. (Day 4)

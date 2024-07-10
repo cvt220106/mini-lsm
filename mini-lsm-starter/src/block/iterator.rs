@@ -81,8 +81,10 @@ impl BlockIterator {
             let first_key_ts = (&data
                 [LEN_VAR_SIZE + key_len..LEN_VAR_SIZE + key_len + size_of::<u64>()])
                 .get_u64();
-            self.first_key =
-                KeyVec::from_vec_with_ts(data[LEN_VAR_SIZE..LEN_VAR_SIZE + key_len].to_vec(), first_key_ts);
+            self.first_key = KeyVec::from_vec_with_ts(
+                data[LEN_VAR_SIZE..LEN_VAR_SIZE + key_len].to_vec(),
+                first_key_ts,
+            );
             self.key = self.first_key.clone();
             // first key-pair struct
             // | key_len(2b) | key(key_len) | (mvcc ts(8b) | value_len(2b) | value(value_len) |

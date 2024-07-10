@@ -5,7 +5,7 @@ use anyhow::Result;
 use bytes::BufMut;
 
 use super::{BlockMeta, FileObject, SsTable};
-use crate::key::{KeyVec};
+use crate::key::KeyVec;
 use crate::table::bloom::Bloom;
 use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
 

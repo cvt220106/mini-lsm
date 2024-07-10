@@ -4,6 +4,7 @@ use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::key::{KeyBytes, KeySlice};
 use anyhow::{Context, Result};
 use bytes::{Buf, BufMut, Bytes};
 use crossbeam_skiplist::SkipMap;
@@ -27,7 +28,7 @@ impl Wal {
         })
     }
 
-    pub fn recover(_path: impl AsRef<Path>, _skiplist: &SkipMap<Bytes, Bytes>) -> Result<Self> {
+    pub fn recover(_path: impl AsRef<Path>, _skiplist: &SkipMap<KeyBytes, Bytes>) -> Result<Self> {
         let mut file = OpenOptions::new()
             .read(true)
             .append(true)
@@ -40,16 +41,19 @@ impl Wal {
         while buf_index.has_remaining() {
             let mut hasher = crc32fast::Hasher::new();
             let key_len = buf_index.get_u16();
-            hasher.write_u16(key_len as u16);
+            hasher.write_u16(key_len);
             let key = buf_index.copy_to_bytes(key_len as usize);
             hasher.write(key.as_ref());
+            // read ts
+            let ts = buf_index.get_u64();
+            hasher.write_u64(ts);
             let value_len = buf_index.get_u16();
             hasher.write_u16(value_len);
             let value = buf_index.copy_to_bytes(value_len as usize);
             hasher.write(value.as_ref());
             let check_sum = buf_index.get_u32();
             assert_eq!(check_sum, hasher.finalize());
-            _skiplist.insert(key, value);
+            _skiplist.insert(KeyBytes::from_bytes_with_ts(key, ts), value);
         }
 
         Ok(Self {
@@ -57,17 +61,21 @@ impl Wal {
         })
     }
 
-    pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
+    pub fn put(&self, _key: KeySlice, _value: &[u8]) -> Result<()> {
         let mut hasher = crc32fast::Hasher::new();
         let mut data: Vec<u8> = Vec::new();
-        let key_len = _key.len() as u16;
+        let key_len = _key.key_len() as u16;
         let value_len = _value.len() as u16;
         hasher.write_u16(key_len);
-        hasher.write(_key);
+        hasher.write(_key.key_ref());
+        // write ts
+        hasher.write_u64(_key.ts());
         hasher.write_u16(value_len);
         hasher.write(_value);
         data.put_u16(key_len);
-        data.extend(_key);
+        data.extend(_key.key_ref());
+        // write ts
+        data.put_u64(_key.ts());
         data.put_u16(value_len);
         data.extend(_value);
         data.put_u32(hasher.finalize());
