@@ -223,16 +223,15 @@ impl LsmStorageInner {
     fn use_iter_build_new_ssts(
         &self,
         mut iter: impl for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>,
-        _compact_to_bottom_level: bool,
+        compact_to_bottom_level: bool,
     ) -> Result<Vec<Arc<SsTable>>> {
         // use merge iterator, scan all key-value pair
         // refactor to sort compact sst
-        // 1. sorted, by two merger iter, the next one sequence is sorted
-        // 2. same key, just choose the latest one
-        // 3. delete tombstone, skip it
         let mut new_sst = Vec::new();
         let mut builder = None;
         let mut last_key: Vec<u8> = Vec::new();
+        let mut latest_key_below_watermark = false;
+        let watermark = self.mvcc().watermark();
 
         while iter.is_valid() {
             if builder.is_none() {
@@ -240,15 +239,39 @@ impl LsmStorageInner {
             }
             let same_as_last_key = iter.key().key_ref() == last_key;
 
+            // the first one key version, we set the latest_key_below_watermark to true
+            // it will be changed to false in this same key, when ts <= watermark come true
+            if !same_as_last_key {
+                latest_key_below_watermark = true;
+            }
+
+            if compact_to_bottom_level
+                && latest_key_below_watermark
+                && iter.key().ts() <= watermark
+                && iter.value().is_empty()
+            {
+                // when the latest version is del sign and compact to bottom level, we can really remove it
+                last_key.clear();
+                last_key.extend(iter.key().key_ref());
+                iter.next()?;
+                latest_key_below_watermark = false;
+                continue;
+            }
+
+            if iter.key().ts() <= watermark {
+                // when it's same key and below or equal watermark and not the latest version key
+                // skip for it, just like gc delete
+                if same_as_last_key && !latest_key_below_watermark {
+                    iter.next()?;
+                    continue;
+                }
+                // this one is the latest version key below or equal watermark
+                // set to false, sign the continues next key is not latest version key
+                // we can delete them
+                latest_key_below_watermark = false;
+            }
+
             let builder_inner = builder.as_mut().unwrap();
-            // if compact_to_bottom_level {
-            //     // represent different empty value process idea
-            //     if !iter.value().is_empty() {
-            //         builder_inner.add(iter.key(), iter.value());
-            //     }
-            // } else {
-            //     builder_inner.add(iter.key(), iter.value());
-            // }
 
             if !same_as_last_key && builder_inner.estimated_size() >= self.options.target_sst_size {
                 // attach the size limit, split the sstable file
