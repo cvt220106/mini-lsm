@@ -4,7 +4,9 @@
 pub mod txn;
 pub mod watermark;
 
+use self::{txn::Transaction, watermark::Watermark};
 use crate::lsm_storage::LsmStorageInner;
+use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -13,10 +15,10 @@ use std::{
     sync::Arc,
 };
 
-use self::{txn::Transaction, watermark::Watermark};
-
 pub(crate) struct CommittedTxnData {
     pub(crate) key_hashes: HashSet<u32>,
+    // store origin key, use it in scan read check
+    pub(crate) keys: HashSet<Bytes>,
     #[allow(dead_code)]
     pub(crate) read_ts: u64,
     #[allow(dead_code)]
@@ -65,7 +67,12 @@ impl LsmMvccInner {
             local_storage: Arc::new(SkipMap::new()),
             committed: Arc::new(AtomicBool::new(false)),
             key_hashes: if serializable {
-                Some(Mutex::new((HashSet::new(), HashSet::new())))
+                Some(Mutex::new((
+                    HashSet::new(),
+                    HashSet::new(),
+                    HashSet::new(),
+                    HashSet::new(),
+                )))
             } else {
                 None
             },
