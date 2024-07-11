@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use crate::lsm_storage::WriteBatchRecord;
 use crate::mem_table::map_bound;
 use crate::mvcc::CommittedTxnData;
@@ -143,7 +140,7 @@ impl Transaction {
                 let committed_txns = self.inner.mvcc().committed_txns.lock();
                 for (_, write_data) in committed_txns.range((self.read_ts + 1)..) {
                     for read_key in read_set.iter() {
-                        if let Some(_) = write_data.key_hashes.get(read_key) {
+                        if write_data.key_hashes.contains(read_key) {
                             bail!("serialized check get path failed")
                         }
                     }

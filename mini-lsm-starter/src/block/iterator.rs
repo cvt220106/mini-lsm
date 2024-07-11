@@ -117,7 +117,7 @@ impl BlockIterator {
                 (&data[offset + LEN_VAR_SIZE..LEN_VAR_SIZE * 2 + offset]).get_u16() as usize;
             let rest_key =
                 &data[offset + LEN_VAR_SIZE * 2..LEN_VAR_SIZE * 2 + offset + rest_key_len];
-            let key = Self::reconstruct_key(&self.first_key.key_ref(), rest_key, key_overlap_len);
+            let key = Self::reconstruct_key(self.first_key.key_ref(), rest_key, key_overlap_len);
             // add mvcc ts
             let ts_begin = offset + LEN_VAR_SIZE * 2 + rest_key_len;
             let ts = (&data[ts_begin..ts_begin + size_of::<u64>()]).get_u64();

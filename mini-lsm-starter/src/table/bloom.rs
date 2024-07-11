@@ -89,7 +89,7 @@ impl Bloom {
         filter.resize(nbytes, 0);
 
         for key in keys {
-            let mut h = key.clone();
+            let mut h = *key;
             let delta = (h >> 17) | (h << 15);
             for _ in 0..k {
                 let idx = (h as usize) % nbits;

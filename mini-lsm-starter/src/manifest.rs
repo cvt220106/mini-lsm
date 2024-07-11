@@ -51,7 +51,7 @@ impl Manifest {
             let slice = &buf_index[..len];
             buf_index.advance(len);
             let checksum = buf_index.get_u32();
-            assert_eq!(checksum, crc32fast::hash(&slice));
+            assert_eq!(checksum, crc32fast::hash(slice));
 
             let record = serde_json::from_slice::<ManifestRecord>(slice)?;
             records.push(record);

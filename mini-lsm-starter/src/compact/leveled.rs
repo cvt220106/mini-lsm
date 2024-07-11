@@ -180,7 +180,7 @@ impl LeveledCompactionController {
                 .iter()
                 .filter_map(|x| {
                     if upper_remove_id_set.remove(x) {
-                        return None;
+                        None
                     } else {
                         Some(*x)
                     }
@@ -196,7 +196,7 @@ impl LeveledCompactionController {
                 .iter()
                 .filter_map(|x| {
                     if upper_remove_id_set.remove(x) {
-                        return None;
+                        None
                     } else {
                         Some(*x)
                     }
@@ -215,7 +215,7 @@ impl LeveledCompactionController {
             .iter()
             .filter_map(|x| {
                 if lowe_remove_id_set.remove(x) {
-                    return None;
+                    None
                 } else {
                     Some(*x)
                 }
