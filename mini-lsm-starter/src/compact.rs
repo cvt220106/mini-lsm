@@ -13,7 +13,7 @@ use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
 use crate::key::KeySlice;
-use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::lsm_storage::{CompactionFilter, LsmStorageInner, LsmStorageState};
 use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 use anyhow::Result;
@@ -232,15 +232,16 @@ impl LsmStorageInner {
         let mut last_key: Vec<u8> = Vec::new();
         let mut latest_key_below_watermark = false;
         let watermark = self.mvcc().watermark();
+        let compaction_filters = self.compaction_filters.lock().clone();
 
-        while iter.is_valid() {
+        'outer: while iter.is_valid() {
             if builder.is_none() {
                 builder = Some(SsTableBuilder::new(self.options.block_size));
             }
             let same_as_last_key = iter.key().key_ref() == last_key;
 
-            // the first one key version, we set the latest_key_below_watermark to true
-            // it will be changed to false in this same key, when ts <= watermark come true
+            // the first one key version, set the latest_key_below_watermark to true
+            // it'll be changed to false in this same key, when ts <= watermark come true
             if !same_as_last_key {
                 latest_key_below_watermark = true;
             }
@@ -259,16 +260,33 @@ impl LsmStorageInner {
             }
 
             if iter.key().ts() <= watermark {
-                // when it's same key and below or equal watermark and not the latest version key
+                // when it's the same key
+                // and below or equal watermark and not the latest version key
                 // skip for it, just like gc delete
                 if same_as_last_key && !latest_key_below_watermark {
                     iter.next()?;
                     continue;
                 }
                 // this one is the latest version key below or equal watermark
-                // set to false, sign the continues next key is not latest version key
+                // set to false,
+                // sign the continued next key isn't the latest version key
                 // we can delete them
                 latest_key_below_watermark = false;
+
+                // exist compaction filter, can directly delete key-value
+                // if the key is match the prefix pattern
+                if !compaction_filters.is_empty() {
+                    for filter in compaction_filters.iter() {
+                        match filter {
+                            CompactionFilter::Prefix(prefix) => {
+                                if iter.key().key_ref().starts_with(prefix) {
+                                    iter.next()?;
+                                    continue 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             let builder_inner = builder.as_mut().unwrap();
